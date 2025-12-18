@@ -12,43 +12,57 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. إعدادات المسارات الديناميكية (مهم جداً للعمل على السيرفر)
+# 1. إعدادات المسارات الديناميكية (متوافقة مع السيرفر)
 # ==========================================
-# الحصول على المسار الحالي للمجلد الذي يحتوي على الكود
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
-
 MODEL_DIR = os.path.join(BASE_PATH, 'models')
 DATA_DIR = os.path.join(BASE_PATH, 'Project Data')
-# استخدام مجلد tmp للحفظ لأنه المجلد الوحيد المسموح بالكتابة فيه في Hugging Face
+
+# استخدام مجلد tmp للحفظ لتجنب مشاكل الصلاحيات في Hugging Face
 OUTPUT_DIR = "/tmp/Integrated_Test_Results"
 PROTO_CACHE_FILE = os.path.join(MODEL_DIR, 'food_prototypes.pkl')
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # ==========================================
-# 2. التنسيق الجمالي (CSS)
+# 2. التنسيق الجمالي الشامل (CSS)
 # ==========================================
 st.set_page_config(page_title="AI Food Analyzer Pro", layout="wide")
 
 st.markdown("""
     <style>
-    .main { background-color: #f4f7f6; }
-    .stApp { font-family: 'Segoe UI', sans-serif; }
+    .main { background-color: #f8f9fa; }
     .result-card {
         background-color: white;
         padding: 20px;
         border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         border-left: 10px solid #FF4B4B;
-        margin-top: 20px; margin-bottom: 20px;
+        margin-bottom: 25px;
+    }
+    .siamese-card {
+        border: 1px solid #ddd; 
+        border-radius: 12px; 
+        padding: 10px; 
+        background-color: #ffffff; 
+        box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
+        text-align: center;
+        margin-bottom: 10px;
+    }
+    .file-name-text {
+        font-weight: bold;
+        font-size: 0.85em;
+        color: #444;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .calorie-badge { 
         background-color: #FFF3E0; color: #E65100; 
         padding: 8px 15px; border-radius: 30px; 
-        font-weight: bold; font-size: 1.1em;
-        display: inline-block; border: 1px solid #FFCC80;
+        font-weight: bold; display: inline-block;
+        border: 1px solid #FFCC80;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -79,7 +93,7 @@ class FruitClassifier(nn.Module):
     def forward(self, x): return self.backbone(x)
 
 # ==========================================
-# 4. وظائف التحميل والمعالجة
+# 4. وظائف التحميل
 # ==========================================
 def get_colored_mask(mask_indices, num_classes=31):
     h, w = mask_indices.shape
@@ -92,21 +106,15 @@ def get_colored_mask(mask_indices, num_classes=31):
 
 @st.cache_resource
 def load_assets():
-    json_path = os.path.join(MODEL_DIR, 'part_c_classes.json')
-    if os.path.exists(json_path):
-        with open(json_path, 'r') as f:
-            fruit_classes = json.load(f)['class_names']
-    else:
-        fruit_classes = [f"Class_{i}" for i in range(30)]
-        
+    with open(os.path.join(MODEL_DIR, 'part_c_classes.json'), 'r') as f:
+        fruit_classes = json.load(f)['class_names']
+    
     def load_sd(model, name):
         p = os.path.join(MODEL_DIR, name)
         if os.path.exists(p):
             sd = torch.load(p, map_location=DEVICE)
             model.load_state_dict(sd.get('model_state_dict', sd) if isinstance(sd, dict) else sd, strict=False)
             model.to(DEVICE).eval()
-        else:
-            st.error(f"Missing model file: {name}")
     
     m1 = FoodFruitClassifier(); load_sd(m1, 'part_a_best.pth')
     m2 = ProtoNet(); load_sd(m2, 'protonet_food_model.pth')
@@ -137,17 +145,17 @@ def load_all_calories_map():
 def get_cached_prototypes(_m2):
     if os.path.exists(PROTO_CACHE_FILE):
         with open(PROTO_CACHE_FILE, 'rb') as f: return pickle.load(f)
-    return {} # في حال عدم وجود صور للتدريب يدوياً، يفضل رفع ملف .pkl جاهز
+    return {}
 
 # ==========================================
-# 5. الواجهة (The GUI)
+# 5. واجهة المستخدم الرئيسية
 # ==========================================
 st.title("🍎 Food AI Intelligence Pro")
-tab1, tab2 = st.tabs(["🚀 Comprehensive Analysis", "🧬 Visual Similarity Search"])
+tab1, tab2 = st.tabs(["🚀 Analysis & Segmentation", "🧬 Visual Similarity Search"])
 
 with tab1:
     uploaded_files = st.file_uploader("Upload Images", accept_multiple_files=True)
-    if uploaded_files and st.button("🚀 Start AI Deep Analysis"):
+    if uploaded_files and st.button("🚀 Run Deep Analysis"):
         (m1, m2, m3, m4, m5), fruit_names = load_assets()
         food_protos = get_cached_prototypes(m2)
         cal_map = load_all_calories_map()
@@ -155,15 +163,12 @@ with tab1:
         tf_224 = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
         tf_256 = transforms.Compose([transforms.Resize((256, 256)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
 
-        for idx, file in enumerate(uploaded_files):
-            img_stem = Path(file.name).stem
+        for file in uploaded_files:
             img_pil = Image.open(file).convert('RGB')
             img_t = tf_224(img_pil).unsqueeze(0).to(DEVICE)
             
             with torch.no_grad():
                 is_fruit = torch.argmax(m1(img_t), 1).item() == 1
-                main_lbl = "Fruit" if is_fruit else "Food"
-                
                 if is_fruit:
                     sub_cat = fruit_names[torch.argmax(m3(img_t), 1).item()]
                     img_256 = tf_256(img_pil).unsqueeze(0).to(DEVICE)
@@ -177,91 +182,55 @@ with tab1:
                         dist = torch.norm(emb - proto).item()
                         if dist < min_d: min_d, sub_cat = dist, name
 
-                search_key = sub_cat.lower().replace(' ', '').replace('_', '')
-                cal_val = cal_map.get(search_key, "N/A")
+            search_key = sub_cat.lower().replace(' ', '').replace('_', '')
+            cal_val = cal_map.get(search_key, "N/A")
 
             st.markdown(f'<div class="result-card">', unsafe_allow_html=True)
             c1, c2, c3 = st.columns([1.5, 2, 3])
             with c1: st.image(img_pil, use_container_width=True)
             with c2:
-                color = "#2E7D32" if is_fruit else "#1565C0"
-                st.markdown(f"<h2 style='color:{color};'>{main_lbl}</h2>", unsafe_allow_html=True)
+                st.markdown(f"<h2 style='color:{'#2E7D32' if is_fruit else '#1565C0'};'>{'Fruit' if is_fruit else 'Food'}</h2>", unsafe_allow_html=True)
                 st.write(f"**Identified:** {sub_cat}")
                 st.markdown(f'<div class="calorie-badge">🔥 {cal_val} Cal</div>', unsafe_allow_html=True)
             with c3:
                 if is_fruit:
                     mc1, mc2 = st.columns(2)
-                    mc1.image(b_mask, caption="Binary", use_container_width=True)
-                    mc2.image(colored_mask, caption="Multi-Class", use_container_width=True)
+                    mc1.image(b_mask, caption="Binary Mask", use_container_width=True)
+                    mc2.image(colored_mask, caption="Colored Mask", use_container_width=True)
                 else:
-                    st.info("Visual fingerprinting used for identification.")
+                    st.info("🧬 Identified via Feature Matching against Dataset.")
             st.markdown('</div>', unsafe_allow_html=True)
         st.balloons()
+
 with tab2:
-    st.subheader("🧬 Visual Similarity Search")
-    st.write("Find and rank similar objects using Siamese distance embeddings.")
+    st.subheader("🧬 Visual Similarity Search (Siamese Ranking)")
+    col_a, col_b = st.columns([1, 2])
+    with col_a: anc = st.file_uploader("Anchor Image", key="siamese_anc")
+    with col_b: gall = st.file_uploader("Gallery Collection", accept_multiple_files=True, key="siamese_gal")
     
-    col_anc, col_gal = st.columns([1, 2])
-    with col_anc:
-        anc = st.file_uploader("📸 Anchor Image", key="s_anc_main")
-    with col_gal:
-        gall = st.file_uploader("🖼️ Gallery Collection", accept_multiple_files=True, key="s_gal_main")
-        
     if anc and gall:
         (m1, m2, m3, m4, m5), _ = load_assets()
-        tf = transforms.Compose([
-            transforms.Resize((224, 224)), 
-            transforms.ToTensor(), 
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
-        
+        tf = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
         with torch.no_grad():
-            # استخراج بصمة الصورة المرجعية
             a_emb = m2(tf(Image.open(anc).convert('RGB')).unsqueeze(0).to(DEVICE))
             results = []
-            
-            # معالجة جاليري الصور
             for gf in gall:
                 g_emb = m2(tf(Image.open(gf).convert('RGB')).unsqueeze(0).to(DEVICE))
                 dist = torch.norm(a_emb - g_emb).item()
                 results.append({'f': gf, 'n': gf.name, 'd': dist})
             
-            # ترتيب النتائج من الأقرب للأبعد
             results.sort(key=lambda x: x['d'])
-            
             st.divider()
-            st.markdown("### 📊 Similarity Ranking (Most Similar First)")
-            
-            # عرض النتائج في شبكة (Grid)
             cols = st.columns(4)
             for i, item in enumerate(results):
                 with cols[i % 4]:
-                    # تصميم كارت صغير لكل نتيجة
                     st.markdown(f"""
-                        <div style="
-                            border: 1px solid #ddd; 
-                            border-radius: 10px; 
-                            padding: 10px; 
-                            background-color: white; 
-                            box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
-                            margin-bottom: 15px;
-                            text-align: center;
-                        ">
-                            <p style="margin: 0; font-weight: bold; font-size: 0.85em; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                📄 {item['n']}
-                            </p>
+                        <div class="siamese-card">
+                            <div class="file-name-text">📄 {item['n']}</div>
                         </div>
                     """, unsafe_allow_html=True)
-                    
                     st.image(item['f'], use_container_width=True)
-                    
-                    # عرض المسافة بلون متغير حسب الدقة
-                    dist_color = "green" if item['d'] < 10 else "orange" if item['d'] < 20 else "red"
-                    st.markdown(f"<p style='text-align:center; color:{dist_color}; font-weight:bold;'>Distance: {item['d']:.3f}</p>", unsafe_allow_html=True)
-                    
-                    if item['d'] < 10:
-                        st.success("✅ Match")
-                    elif item['d'] < 20:
-                        st.warning("⚠️ Likely")
-                    else:
-                        st.error("❌ Different")}")
+                    d_color = "green" if item['d'] < 10 else "orange" if item['d'] < 20 else "red"
+                    st.markdown(f"<p style='text-align:center; color:{d_color}; font-weight:bold;'>Dist: {item['d']:.3f}</p>", unsafe_allow_html=True)
+                    if item['d'] < 10: st.success("Match")
+                    else: st.info("Close" if item['d'] < 20 else "No Match")
