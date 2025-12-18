@@ -12,17 +12,17 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. إعدادات المسارات الديناميكية (مهم جداً للرفع)
+# 1. إعدادات المسارات الديناميكية (مهم جداً للعمل على السيرفر)
 # ==========================================
-# السطر القادم يحدد مسار الفولدر الحالي تلقائياً أياً كان مكانه
+# الحصول على المسار الحالي للمجلد الذي يحتوي على الكود
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 MODEL_DIR = os.path.join(BASE_PATH, 'models')
 DATA_DIR = os.path.join(BASE_PATH, 'Project Data')
-OUTPUT_DIR = os.path.join(BASE_PATH, 'Integrated_Test_Results')
+# استخدام مجلد tmp للحفظ لأنه المجلد الوحيد المسموح بالكتابة فيه في Hugging Face
+OUTPUT_DIR = "/tmp/Integrated_Test_Results"
 PROTO_CACHE_FILE = os.path.join(MODEL_DIR, 'food_prototypes.pkl')
 
-# التأكد من وجود مجلد النتائج
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -92,13 +92,12 @@ def get_colored_mask(mask_indices, num_classes=31):
 
 @st.cache_resource
 def load_assets():
-    # تحميل أسماء الكلاسات
     json_path = os.path.join(MODEL_DIR, 'part_c_classes.json')
     if os.path.exists(json_path):
         with open(json_path, 'r') as f:
             fruit_classes = json.load(f)['class_names']
     else:
-        fruit_classes = [f"Fruit_{i}" for i in range(30)] # Fallback
+        fruit_classes = [f"Class_{i}" for i in range(30)]
         
     def load_sd(model, name):
         p = os.path.join(MODEL_DIR, name)
@@ -111,8 +110,7 @@ def load_assets():
     
     m1 = FoodFruitClassifier(); load_sd(m1, 'part_a_best.pth')
     m2 = ProtoNet(); load_sd(m2, 'protonet_food_model.pth')
-    # لاحظ هنا تم تغيير الاسم لـ part_c_fixed بناء على صورتك لتقليل الحجم
-    m3 = FruitClassifier(len(fruit_classes)); load_sd(m3, 'part_c_fixed.pth') 
+    m3 = FruitClassifier(len(fruit_classes)); load_sd(m3, 'part_c_best.pth')
     m4 = smp.Unet("resnet34", in_channels=3, classes=1); load_sd(m4, 'best_model.pth')
     m5 = smp.Unet("resnet34", in_channels=3, classes=31); load_sd(m5, 'best_fruit_segmentation.pth')
     return (m1, m2, m3, m4, m5), fruit_classes
@@ -139,23 +137,7 @@ def load_all_calories_map():
 def get_cached_prototypes(_m2):
     if os.path.exists(PROTO_CACHE_FILE):
         with open(PROTO_CACHE_FILE, 'rb') as f: return pickle.load(f)
-    prototypes = {}
-    tf = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
-    FOOD_DIRS = [os.path.join(DATA_DIR, 'Food/Train'), os.path.join(DATA_DIR, 'Food/Validation')]
-    for folder in FOOD_DIRS:
-        if os.path.exists(folder):
-            for cls in os.listdir(folder):
-                cls_p = os.path.join(folder, cls)
-                if os.path.isdir(cls_p):
-                    imgs = [f for f in os.listdir(cls_p) if f.lower().endswith(('.jpg', '.png'))][:5]
-                    embs = []
-                    for n in imgs:
-                        img_t = tf(Image.open(os.path.join(cls_p, n)).convert('RGB')).unsqueeze(0).to(DEVICE)
-                        with torch.no_grad(): embs.append(_m2(img_t).cpu())
-                    if embs: prototypes[cls] = torch.mean(torch.stack(embs), dim=0)
-    if prototypes:
-        with open(PROTO_CACHE_FILE, 'wb') as f: pickle.dump(prototypes, f)
-    return prototypes
+    return {} # في حال عدم وجود صور للتدريب يدوياً، يفضل رفع ملف .pkl جاهز
 
 # ==========================================
 # 5. الواجهة (The GUI)
@@ -165,7 +147,7 @@ tab1, tab2 = st.tabs(["🚀 Comprehensive Analysis", "🧬 Visual Similarity Sea
 
 with tab1:
     uploaded_files = st.file_uploader("Upload Images", accept_multiple_files=True)
-    if uploaded_files and st.button("🚀 Execute Analysis"):
+    if uploaded_files and st.button("🚀 Start AI Deep Analysis"):
         (m1, m2, m3, m4, m5), fruit_names = load_assets()
         food_protos = get_cached_prototypes(m2)
         cal_map = load_all_calories_map()
@@ -175,9 +157,6 @@ with tab1:
 
         for idx, file in enumerate(uploaded_files):
             img_stem = Path(file.name).stem
-            current_img_dir = os.path.join(OUTPUT_DIR, img_stem)
-            os.makedirs(current_img_dir, exist_ok=True)
-            
             img_pil = Image.open(file).convert('RGB')
             img_t = tf_224(img_pil).unsqueeze(0).to(DEVICE)
             
@@ -188,12 +167,9 @@ with tab1:
                 if is_fruit:
                     sub_cat = fruit_names[torch.argmax(m3(img_t), 1).item()]
                     img_256 = tf_256(img_pil).unsqueeze(0).to(DEVICE)
-                    # Masks
                     b_mask = (torch.sigmoid(m4(img_256)) > 0.5).float().cpu().numpy()[0][0]
-                    plt.imsave(os.path.join(current_img_dir, "binary_mask.png"), b_mask, cmap='gray')
                     m_mask_indices = torch.argmax(m5(img_256), 1).cpu().numpy()[0]
                     colored_mask = get_colored_mask(m_mask_indices)
-                    Image.fromarray(colored_mask).save(os.path.join(current_img_dir, "multi_mask.png"))
                 else:
                     emb = m2(img_t).cpu()
                     sub_cat, min_d = "Unknown", float('inf')
@@ -204,19 +180,21 @@ with tab1:
                 search_key = sub_cat.lower().replace(' ', '').replace('_', '')
                 cal_val = cal_map.get(search_key, "N/A")
 
-            # عرض النتائج في بطاقة
             st.markdown(f'<div class="result-card">', unsafe_allow_html=True)
             c1, c2, c3 = st.columns([1.5, 2, 3])
             with c1: st.image(img_pil, use_container_width=True)
             with c2:
-                st.markdown(f"## {main_lbl}")
+                color = "#2E7D32" if is_fruit else "#1565C0"
+                st.markdown(f"<h2 style='color:{color};'>{main_lbl}</h2>", unsafe_allow_html=True)
                 st.write(f"**Identified:** {sub_cat}")
                 st.markdown(f'<div class="calorie-badge">🔥 {cal_val} Cal</div>', unsafe_allow_html=True)
             with c3:
                 if is_fruit:
                     mc1, mc2 = st.columns(2)
-                    mc1.image(os.path.join(current_img_dir, "binary_mask.png"), caption="Binary")
-                    mc2.image(os.path.join(current_img_dir, "multi_mask.png"), caption="Multi-Class")
+                    mc1.image(b_mask, caption="Binary", use_container_width=True)
+                    mc2.image(colored_mask, caption="Multi-Class", use_container_width=True)
+                else:
+                    st.info("Visual fingerprinting used for identification.")
             st.markdown('</div>', unsafe_allow_html=True)
         st.balloons()
 
