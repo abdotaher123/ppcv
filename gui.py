@@ -197,24 +197,71 @@ with tab1:
                     st.info("Visual fingerprinting used for identification.")
             st.markdown('</div>', unsafe_allow_html=True)
         st.balloons()
-
 with tab2:
-    st.subheader("Visual Similarity Search")
-    anc = st.file_uploader("Anchor Image")
-    gall = st.file_uploader("Gallery Collection", accept_multiple_files=True)
+    st.subheader("🧬 Visual Similarity Search")
+    st.write("Find and rank similar objects using Siamese distance embeddings.")
+    
+    col_anc, col_gal = st.columns([1, 2])
+    with col_anc:
+        anc = st.file_uploader("📸 Anchor Image", key="s_anc_main")
+    with col_gal:
+        gall = st.file_uploader("🖼️ Gallery Collection", accept_multiple_files=True, key="s_gal_main")
+        
     if anc and gall:
         (m1, m2, m3, m4, m5), _ = load_assets()
-        tf = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+        tf = transforms.Compose([
+            transforms.Resize((224, 224)), 
+            transforms.ToTensor(), 
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+        
         with torch.no_grad():
+            # استخراج بصمة الصورة المرجعية
             a_emb = m2(tf(Image.open(anc).convert('RGB')).unsqueeze(0).to(DEVICE))
             results = []
+            
+            # معالجة جاليري الصور
             for gf in gall:
                 g_emb = m2(tf(Image.open(gf).convert('RGB')).unsqueeze(0).to(DEVICE))
                 dist = torch.norm(a_emb - g_emb).item()
                 results.append({'f': gf, 'n': gf.name, 'd': dist})
+            
+            # ترتيب النتائج من الأقرب للأبعد
             results.sort(key=lambda x: x['d'])
+            
+            st.divider()
+            st.markdown("### 📊 Similarity Ranking (Most Similar First)")
+            
+            # عرض النتائج في شبكة (Grid)
             cols = st.columns(4)
             for i, item in enumerate(results):
                 with cols[i % 4]:
+                    # تصميم كارت صغير لكل نتيجة
+                    st.markdown(f"""
+                        <div style="
+                            border: 1px solid #ddd; 
+                            border-radius: 10px; 
+                            padding: 10px; 
+                            background-color: white; 
+                            box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+                            margin-bottom: 15px;
+                            text-align: center;
+                        ">
+                            <p style="margin: 0; font-weight: bold; font-size: 0.85em; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                📄 {item['n']}
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    
                     st.image(item['f'], use_container_width=True)
-                    st.metric("Dist", f"{item['d']:.2f}")
+                    
+                    # عرض المسافة بلون متغير حسب الدقة
+                    dist_color = "green" if item['d'] < 10 else "orange" if item['d'] < 20 else "red"
+                    st.markdown(f"<p style='text-align:center; color:{dist_color}; font-weight:bold;'>Distance: {item['d']:.3f}</p>", unsafe_allow_html=True)
+                    
+                    if item['d'] < 10:
+                        st.success("✅ Match")
+                    elif item['d'] < 20:
+                        st.warning("⚠️ Likely")
+                    else:
+                        st.error("❌ Different")}")
