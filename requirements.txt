@@ -1,0 +1,7 @@
+streamlit
+torch
+torchvision
+pillow
+segmentation-models-pytorch
+matplotlib
+numpy
