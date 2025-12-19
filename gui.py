@@ -12,13 +12,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. إعدادات المسارات الديناميكية (متوافقة مع السيرفر)
+# 1. إعدادات المسارات والبيئة
 # ==========================================
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_PATH, 'models')
 DATA_DIR = os.path.join(BASE_PATH, 'Project Data')
-
-# استخدام مجلد tmp للحفظ لتجنب مشاكل الصلاحيات في Hugging Face
 OUTPUT_DIR = "/tmp/Integrated_Test_Results"
 PROTO_CACHE_FILE = os.path.join(MODEL_DIR, 'food_prototypes.pkl')
 
@@ -26,7 +24,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # ==========================================
-# 2. التنسيق الجمالي الشامل (CSS)
+# 2. التنسيق الجمالي (CSS)
 # ==========================================
 st.set_page_config(page_title="AI Food Analyzer Pro", layout="wide")
 
@@ -34,35 +32,26 @@ st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
     .result-card {
-        background-color: white;
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        border-left: 10px solid #FF4B4B;
+        background-color: white; padding: 20px; border-radius: 15px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-left: 10px solid #FF4B4B;
         margin-bottom: 25px;
     }
     .siamese-card {
-        border: 1px solid #ddd; 
-        border-radius: 12px; 
-        padding: 10px; 
-        background-color: #ffffff; 
-        box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
-        text-align: center;
-        margin-bottom: 10px;
+        border: 1px solid #ddd; border-radius: 12px; padding: 10px; 
+        background-color: #ffffff; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
+        text-align: center; margin-bottom: 10px;
     }
     .file-name-text {
-        font-weight: bold;
-        font-size: 0.85em;
-        color: #444;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        font-weight: bold; font-size: 0.85em; color: #444;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .calorie-badge { 
-        background-color: #FFF3E0; color: #E65100; 
-        padding: 8px 15px; border-radius: 30px; 
-        font-weight: bold; display: inline-block;
-        border: 1px solid #FFCC80;
+        background-color: #FFF3E0; color: #E65100; padding: 8px 15px; 
+        border-radius: 30px; font-weight: bold; display: inline-block;
+        border: 1px solid #FFCC80; margin-top: 5px;
+    }
+    .weight-tag {
+        font-size: 0.9em; color: #666; font-style: italic;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -93,8 +82,24 @@ class FruitClassifier(nn.Module):
     def forward(self, x): return self.backbone(x)
 
 # ==========================================
-# 4. وظائف التحميل
+# 4. الوظائف المساعدة (تحميل وحساب)
 # ==========================================
+def extract_weight_from_name(filename):
+    """يستخرج الرقم الموجود قبل حرف g في اسم الملف"""
+    grams = 100.0  # القيمة الافتراضية
+    try:
+        name_lower = filename.lower()
+        if 'g' in name_lower:
+            # تقسيم الاسم عند حرف g وأخذ الجزء الذي قبله مباشرة
+            pre_g = name_lower.split('g')[0]
+            # استخراج آخر أرقام متصلة قبل الـ g
+            weight_str = "".join([c for c in pre_g.split('_')[-1] if c.isdigit() or c == '.'])
+            if weight_str:
+                grams = float(weight_str)
+    except:
+        pass
+    return grams
+
 def get_colored_mask(mask_indices, num_classes=31):
     h, w = mask_indices.shape
     color_mask = np.zeros((h, w, 3), dtype=np.uint8)
@@ -148,7 +153,7 @@ def get_cached_prototypes(_m2):
     return {}
 
 # ==========================================
-# 5. واجهة المستخدم الرئيسية
+# 5. واجهة المستخدم
 # ==========================================
 st.title("🍎 Food AI Intelligence Pro")
 tab1, tab2 = st.tabs(["🚀 Analysis & Segmentation", "🧬 Visual Similarity Search"])
@@ -167,6 +172,9 @@ with tab1:
             img_pil = Image.open(file).convert('RGB')
             img_t = tf_224(img_pil).unsqueeze(0).to(DEVICE)
             
+            # استخراج الوزن وحساب السعرات
+            grams = extract_weight_from_name(file.name)
+            
             with torch.no_grad():
                 is_fruit = torch.argmax(m1(img_t), 1).item() == 1
                 if is_fruit:
@@ -182,8 +190,14 @@ with tab1:
                         dist = torch.norm(emb - proto).item()
                         if dist < min_d: min_d, sub_cat = dist, name
 
+            # حساب السعرات النهائية بناءً على الوزن
             search_key = sub_cat.lower().replace(' ', '').replace('_', '')
-            cal_val = cal_map.get(search_key, "N/A")
+            base_cal = cal_map.get(search_key, "N/A")
+            if base_cal != "N/A":
+                final_cal = (float(base_cal) * grams) / 100.0
+                cal_display = f"{final_cal:.1f}"
+            else:
+                cal_display = "N/A"
 
             st.markdown(f'<div class="result-card">', unsafe_allow_html=True)
             c1, c2, c3 = st.columns([1.5, 2, 3])
@@ -191,14 +205,15 @@ with tab1:
             with c2:
                 st.markdown(f"<h2 style='color:{'#2E7D32' if is_fruit else '#1565C0'};'>{'Fruit' if is_fruit else 'Food'}</h2>", unsafe_allow_html=True)
                 st.write(f"**Identified:** {sub_cat}")
-                st.markdown(f'<div class="calorie-badge">🔥 {cal_val} Cal</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="calorie-badge">🔥 {cal_display} Cal</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="weight-tag">Weight detected: {grams}g</div>', unsafe_allow_html=True)
             with c3:
                 if is_fruit:
                     mc1, mc2 = st.columns(2)
                     mc1.image(b_mask, caption="Binary Mask", use_container_width=True)
                     mc2.image(colored_mask, caption="Colored Mask", use_container_width=True)
                 else:
-                    st.info("🧬 Identified via Feature Matching against Dataset.")
+                    st.info("🧬 Feature Matching Logic: Object recognized via visual fingerprinting.")
             st.markdown('</div>', unsafe_allow_html=True)
         st.balloons()
 
@@ -224,11 +239,7 @@ with tab2:
             cols = st.columns(4)
             for i, item in enumerate(results):
                 with cols[i % 4]:
-                    st.markdown(f"""
-                        <div class="siamese-card">
-                            <div class="file-name-text">📄 {item['n']}</div>
-                        </div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f'<div class="siamese-card"><div class="file-name-text">📄 {item["n"]}</div></div>', unsafe_allow_html=True)
                     st.image(item['f'], use_container_width=True)
                     d_color = "green" if item['d'] < 10 else "orange" if item['d'] < 20 else "red"
                     st.markdown(f"<p style='text-align:center; color:{d_color}; font-weight:bold;'>Dist: {item['d']:.3f}</p>", unsafe_allow_html=True)
