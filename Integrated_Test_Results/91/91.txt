@@ -1,0 +1,3 @@
+Fruit
+Dragon
+60.0
