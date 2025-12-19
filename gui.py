@@ -13,7 +13,22 @@ import matplotlib.pyplot as plt
 import re
 
 # ==========================================
-# 1. الإعدادات والتنسيق الجمالي (CSS)
+# 1. إعداد المسارات الديناميكية (GitHub Ready)
+# ==========================================
+# هذا السطر يجعل BASE_PATH هو المجلد الذي يحتوي على ملف app.py نفسه
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+
+MODEL_DIR = os.path.join(BASE_PATH, 'models')
+DATA_DIR = os.path.join(BASE_PATH, 'Project Data')
+OUTPUT_DIR = os.path.join(BASE_PATH, 'Integrated_Test_Results')
+PROTO_CACHE_FILE = os.path.join(MODEL_DIR, 'food_prototypes.pkl')
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# إنشاء مجلد النتائج إذا لم يكن موجوداً
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# ==========================================
+# 2. التنسيق الجمالي (CSS)
 # ==========================================
 st.set_page_config(page_title="AI Food Analyzer Pro", layout="wide")
 
@@ -38,21 +53,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# المسارات
-BASE_PATH = "D:/fcis/Cv/Computer-Vision-Project-main"
-MODEL_DIR = os.path.join(BASE_PATH, 'models')
-DATA_DIR = os.path.join(BASE_PATH, 'Project Data')
-OUTPUT_DIR = os.path.join(BASE_PATH, 'Integrated_Test_Results')
-PROTO_CACHE_FILE = os.path.join(MODEL_DIR, 'food_prototypes.pkl')
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 # ==========================================
-# 2. وظائف المعالجة الذكية (الوزن والسعرات)
+# 3. الوظائف المساعدة
 # ==========================================
 def extract_weight(filename):
-    """يستخرج الرقم الموجود قبل حرف g في اسم الملف"""
     try:
         match = re.search(r'(\d+)g', filename.lower())
         if match: return float(match.group(1))
@@ -60,13 +64,10 @@ def extract_weight(filename):
     return 100.0
 
 def get_final_calories(raw_text, grams):
-    """ينظف نص السعرات ويحسب الإجمالي بناءً على الوزن"""
     if not raw_text or raw_text == "N/A": return "N/A"
     try:
-        # استخراج الرقم فقط (يتعامل مع صيغة ~0.83 calories per gram)
         num_part = "".join([c for c in raw_text if c.isdigit() or c == '.'])
         val_per_unit = float(num_part)
-        
         if "per gram" in raw_text.lower():
             total = val_per_unit * grams
         else:
@@ -75,7 +76,7 @@ def get_final_calories(raw_text, grams):
     except: return raw_text
 
 # ==========================================
-# 3. هياكل الموديلات
+# 4. هياكل الموديلات
 # ==========================================
 class FoodFruitClassifier(nn.Module):
     def __init__(self, num_classes=2):
@@ -110,8 +111,13 @@ def get_colored_mask(mask_indices, num_classes=31):
 
 @st.cache_resource
 def load_all_assets():
-    with open(os.path.join(MODEL_DIR, 'part_c_classes.json'), 'r') as f:
-        fruit_names = json.load(f)['class_names']
+    # التحقق من وجود ملف الـ JSON
+    json_path = os.path.join(MODEL_DIR, 'part_c_classes.json')
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            fruit_names = json.load(f)['class_names']
+    else:
+        fruit_names = [f"Class_{i}" for i in range(30)] # Fallback
     
     def load_sd(model, name):
         p = os.path.join(MODEL_DIR, name)
@@ -130,7 +136,11 @@ def load_all_assets():
 @st.cache_resource
 def load_cal_map():
     cal_map = {}
-    files = [os.path.join(DATA_DIR, 'Food/Train Calories.txt'), os.path.join(DATA_DIR, 'Food/Val Calories.txt'), os.path.join(DATA_DIR, 'Fruit/Calories.txt')]
+    files = [
+        os.path.join(DATA_DIR, 'Food', 'Train Calories.txt'),
+        os.path.join(DATA_DIR, 'Food', 'Val Calories.txt'),
+        os.path.join(DATA_DIR, 'Fruit', 'Calories.txt')
+    ]
     for fp in files:
         if os.path.exists(fp):
             with open(fp, 'r', encoding='utf-8') as f:
@@ -142,21 +152,28 @@ def load_cal_map():
     return cal_map
 
 # ==========================================
-# 4. واجهة المستخدم الرئيسية (Tabs)
+# 5. الواجهة البرمجية (Tabs)
 # ==========================================
 st.title("🍎 Food AI Intelligence Pro")
 tab1, tab2 = st.tabs(["🚀 Comprehensive Analysis", "🧬 Visual Similarity Search"])
 
+# تحميل البيانات والموديلات مرة واحدة
 (m1, m2, m3, m4, m5), fruit_classes = load_all_assets()
 cal_map = load_cal_map()
-food_protos = pickle.load(open(PROTO_CACHE_FILE, 'rb')) if os.path.exists(PROTO_CACHE_FILE) else {}
+
+# التأكد من تحميل الـ Prototypes
+if os.path.exists(PROTO_CACHE_FILE):
+    with open(PROTO_CACHE_FILE, 'rb') as f:
+        food_protos = pickle.load(f)
+else:
+    food_protos = {}
+    st.warning("⚠️ Food prototypes file not found. Food identification might be limited.")
 
 with tab1:
     uploaded = st.file_uploader("Upload Images", accept_multiple_files=True, key="tab1_up")
     if uploaded and st.button("🚀 Run AI Analysis"):
-        # تحويلات مختلفة لضمان دقة السيجمنتيشن
         tf_cls = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
-        tf_seg = transforms.Compose([transforms.Resize((256, 256)), transforms.ToTensor()]) # بدون Normalize للسيجمنتيشن
+        tf_seg = transforms.Compose([transforms.Resize((256, 256)), transforms.ToTensor()]) 
 
         for file in uploaded:
             img_pil = Image.open(file).convert('RGB')
@@ -167,7 +184,6 @@ with tab1:
                 is_fruit = torch.argmax(m1(img_t_cls), 1).item() == 1
                 if is_fruit:
                     sub_cat = fruit_classes[torch.argmax(m3(img_t_cls), 1).item()]
-                    # معالجة السيجمنتيشن بصورة نظيفة
                     img_t_seg = tf_seg(img_pil).unsqueeze(0).to(DEVICE)
                     b_mask = (torch.sigmoid(m4(img_t_seg)) > 0.5).float().cpu().numpy()[0][0]
                     m_mask_idx = torch.argmax(m5(img_t_seg), 1).cpu().numpy()[0]
@@ -179,11 +195,9 @@ with tab1:
                         d = torch.norm(emb - proto).item()
                         if d < min_d: min_d, sub_cat = d, name
 
-            # حساب السعرات
             raw_val = cal_map.get(sub_cat.lower().replace(' ', '').replace('_', ''), "N/A")
             total_cal = get_final_calories(raw_val, grams)
 
-            # العرض الجمالي
             st.markdown(f'<div class="result-card">', unsafe_allow_html=True)
             c1, c2, c3 = st.columns([1.5, 2, 3.5])
             c1.image(img_pil, use_container_width=True)
@@ -202,8 +216,6 @@ with tab1:
 
 with tab2:
     st.subheader("🧬 Visual Similarity Search")
-    st.write("Find similar images in your collection based on visual features.")
-    
     col_a, col_b = st.columns([1, 2])
     with col_a: anc = st.file_uploader("Anchor Image", key="siamese_anc")
     with col_b: gall = st.file_uploader("Gallery Collection", accept_multiple_files=True, key="siamese_gall")
@@ -218,18 +230,12 @@ with tab2:
                 dist = torch.norm(a_emb - g_emb).item()
                 results.append({'file': gf, 'name': gf.name, 'dist': dist})
             
-            # ترتيب النتائج من الأقرب للأبعد
             results.sort(key=lambda x: x['dist'])
-            
             st.divider()
             cols = st.columns(4)
             for i, item in enumerate(results):
                 with cols[i % 4]:
                     st.markdown(f'<div class="siamese-card"><b>{item["name"]}</b></div>', unsafe_allow_html=True)
                     st.image(item['file'], use_container_width=True)
-                    # تلوين النتيجة بناءً على المسافة
                     d_color = "green" if item['dist'] < 10 else "orange" if item['dist'] < 20 else "red"
                     st.markdown(f"<p style='text-align:center; color:{d_color};'><b>Dist: {item['dist']:.3f}</b></p>", unsafe_allow_html=True)
-                    if item['dist'] < 10: st.success("Match")
-                    elif item['dist'] < 20: st.warning("Similar")
-                    else: st.error("Different")
