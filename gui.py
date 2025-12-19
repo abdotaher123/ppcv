@@ -12,15 +12,21 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 # ==========================================
-# 1. إعدادات المسارات والبيئة
+# 1. إعدادات المسارات الديناميكية (متوافقة مع السيرفر)
 # ==========================================
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_PATH, 'models')
 DATA_DIR = os.path.join(BASE_PATH, 'Project Data')
+
+# استخدام مجلد tmp للحفظ لتجنب مشاكل الصلاحيات في Hugging Face
+OUTPUT_DIR = "/tmp/Integrated_Test_Results"
+PROTO_CACHE_FILE = os.path.join(MODEL_DIR, 'food_prototypes.pkl')
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # ==========================================
-# 2. التنسيق الجمالي (CSS)
+# 2. التنسيق الجمالي الشامل (CSS)
 # ==========================================
 st.set_page_config(page_title="AI Food Analyzer Pro", layout="wide")
 
@@ -28,76 +34,47 @@ st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
     .result-card {
-        background-color: white; padding: 20px; border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-left: 10px solid #FF4B4B;
+        background-color: white;
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        border-left: 10px solid #FF4B4B;
         margin-bottom: 25px;
     }
     .siamese-card {
-        border: 1px solid #ddd; border-radius: 12px; padding: 10px; 
-        background-color: #ffffff; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
-        text-align: center; margin-bottom: 10px;
+        border: 1px solid #ddd; 
+        border-radius: 12px; 
+        padding: 10px; 
+        background-color: #ffffff; 
+        box-shadow: 2px 2px 8px rgba(0,0,0,0.05);
+        text-align: center;
+        margin-bottom: 10px;
     }
     .file-name-text {
-        font-weight: bold; font-size: 0.85em; color: #444;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        font-weight: bold;
+        font-size: 0.85em;
+        color: #444;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .calorie-badge { 
-        background-color: #FFF3E0; color: #E65100; padding: 8px 15px; 
-        border-radius: 30px; font-weight: bold; display: inline-block;
-        border: 1px solid #FFCC80; margin-top: 5px; font-size: 1.1em;
-    }
-    .weight-tag {
-        font-size: 0.9em; color: #666; font-style: italic; margin-top: 5px;
+        background-color: #FFF3E0; color: #E65100; 
+        padding: 8px 15px; border-radius: 30px; 
+        font-weight: bold; display: inline-block;
+        border: 1px solid #FFCC80;
     }
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. الوظائف الذكية (حسابات الوزن والسعرات)
-# ==========================================
-def extract_weight_from_name(filename):
-    """يستخرج الوزن من اسم الملف، مثال: 2371108_112g.jpg تعطي 112.0"""
-    grams = 100.0
-    try:
-        name_lower = filename.lower()
-        if 'g' in name_lower:
-            # نأخذ الجزء الذي يسبق حرف g مباشرة
-            pre_g = name_lower.split('g')[0]
-            weight_str = "".join([c for c in pre_g.split('_')[-1] if c.isdigit() or c == '.'])
-            if weight_str:
-                grams = float(weight_str)
-    except: pass
-    return grams
-
-def calculate_final_calories(raw_text, grams):
-    """يعالج نصوص مثل '~0.83 calories per gram' ويحسب الإجمالي"""
-    if not raw_text or raw_text == "N/A": return "N/A"
-    try:
-        # استخراج الرقم فقط من النص (تجاهل ~ والكلمات)
-        clean_num = "".join([c for c in raw_text if c.isdigit() or c == '.'])
-        if not clean_num: return raw_text
-        
-        val_per_unit = float(clean_num)
-        
-        # إذا كان الملف يحدد أنها "لكل جرام"
-        if "per gram" in raw_text.lower():
-            total = val_per_unit * grams
-        else:
-            # الافتراضي (لكل 100 جرام)
-            total = (val_per_unit * grams) / 100.0
-            
-        return f"{total:.1f}"
-    except:
-        return raw_text
-
-# ==========================================
-# 4. هياكل الموديلات
+# 3. هياكل الموديلات
 # ==========================================
 class FoodFruitClassifier(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=2):
         super().__init__()
         self.backbone = models.resnet18(weights=None)
-        self.backbone.fc = nn.Linear(self.backbone.fc.in_features, 2)
+        self.backbone.fc = nn.Sequential(nn.Dropout(0.5), nn.Linear(self.backbone.fc.in_features, num_classes))
     def forward(self, x): return self.backbone(x)
 
 class ProtoNet(nn.Module):
@@ -109,18 +86,26 @@ class ProtoNet(nn.Module):
     def forward(self, x): return self.head(self.backbone(x))
 
 class FruitClassifier(nn.Module):
-    def __init__(self, num_classes):
+    def __init__(self, num_classes=30):
         super().__init__()
         self.backbone = models.resnet50(weights=None)
-        self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
+        self.backbone.fc = nn.Sequential(nn.Dropout(0.5), nn.Linear(self.backbone.fc.in_features, 512), nn.ReLU(), nn.Dropout(0.3), nn.Linear(512, num_classes))
     def forward(self, x): return self.backbone(x)
 
 # ==========================================
-# 5. تحميل الملفات والأوزان
+# 4. وظائف التحميل
 # ==========================================
+def get_colored_mask(mask_indices, num_classes=31):
+    h, w = mask_indices.shape
+    color_mask = np.zeros((h, w, 3), dtype=np.uint8)
+    cmap = plt.get_cmap('gist_ncar', num_classes)
+    for cls_idx in range(1, num_classes):
+        color = np.array(cmap(cls_idx)[:3]) * 255
+        color_mask[mask_indices == cls_idx] = color.astype(np.uint8)
+    return color_mask
+
 @st.cache_resource
-def load_all_assets():
-    # تحميل أسماء الكلاسات
+def load_assets():
     with open(os.path.join(MODEL_DIR, 'part_c_classes.json'), 'r') as f:
         fruit_classes = json.load(f)['class_names']
     
@@ -136,77 +121,86 @@ def load_all_assets():
     m3 = FruitClassifier(len(fruit_classes)); load_sd(m3, 'part_c_best.pth')
     m4 = smp.Unet("resnet34", in_channels=3, classes=1); load_sd(m4, 'best_model.pth')
     m5 = smp.Unet("resnet34", in_channels=3, classes=31); load_sd(m5, 'best_fruit_segmentation.pth')
-    
     return (m1, m2, m3, m4, m5), fruit_classes
 
 @st.cache_resource
-def load_calories_map():
+def load_all_calories_map():
     cal_map = {}
-    paths = [os.path.join(DATA_DIR, 'Food/Train Calories.txt'), 
-             os.path.join(DATA_DIR, 'Food/Val Calories.txt'), 
-             os.path.join(DATA_DIR, 'Fruit/Calories.txt')]
-    for p in paths:
-        if os.path.exists(p):
-            with open(p, 'r', encoding='utf-8') as f:
+    CALORIE_FILES = [
+        os.path.join(DATA_DIR, 'Food/Train Calories.txt'),
+        os.path.join(DATA_DIR, 'Food/Val Calories.txt'),
+        os.path.join(DATA_DIR, 'Fruit/Calories.txt')
+    ]
+    for fp in CALORIE_FILES:
+        if os.path.exists(fp):
+            with open(fp, 'r', encoding='utf-8') as f:
                 for line in f:
                     if ':' in line:
                         k, v = line.strip().split(':', 1)
-                        # تنظيف المفتاح للبحث الدقيق
-                        norm_k = k.strip().lower().replace(' ', '').replace('_', '')
-                        cal_map[norm_k] = v.strip()
+                        normalized_key = k.strip().lower().replace(' ', '').replace('_', '')
+                        cal_map[normalized_key] = v.strip()
     return cal_map
 
-# ==========================================
-# 6. الواجهة الرئيسية (Tabs)
-# ==========================================
-(models_list, fruit_names) = load_all_assets()
-(m1, m2, m3, m4, m5) = models_list
-cal_map = load_calories_map()
+@st.cache_resource
+def get_cached_prototypes(_m2):
+    if os.path.exists(PROTO_CACHE_FILE):
+        with open(PROTO_CACHE_FILE, 'rb') as f: return pickle.load(f)
+    return {}
 
-tab1, tab2 = st.tabs(["🚀 Deep Food Analysis", "🧬 Siamese Similarity"])
+# ==========================================
+# 5. واجهة المستخدم الرئيسية
+# ==========================================
+st.title("🍎 Food AI Intelligence Pro")
+tab1, tab2 = st.tabs(["🚀 Analysis & Segmentation", "🧬 Visual Similarity Search"])
 
 with tab1:
-    uploaded = st.file_uploader("Upload Food Images", accept_multiple_files=True)
-    if uploaded and st.button("Start AI Analysis"):
+    uploaded_files = st.file_uploader("Upload Images", accept_multiple_files=True)
+    if uploaded_files and st.button("🚀 Run Deep Analysis"):
+        (m1, m2, m3, m4, m5), fruit_names = load_assets()
+        food_protos = get_cached_prototypes(m2)
+        cal_map = load_all_calories_map()
+        
         tf_224 = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
-        tf_256 = transforms.Compose([transforms.Resize((256, 256)), transforms.ToTensor()])
+        tf_256 = transforms.Compose([transforms.Resize((256, 256)), transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
 
-        for f in uploaded:
-            img = Image.open(f).convert('RGB')
-            grams = extract_weight_from_name(f.name)
-            t = tf_224(img).unsqueeze(0).to(DEVICE)
+        for file in uploaded_files:
+            img_pil = Image.open(file).convert('RGB')
+            img_t = tf_224(img_pil).unsqueeze(0).to(DEVICE)
             
             with torch.no_grad():
-                is_fruit = torch.argmax(m1(t), 1).item() == 1
+                is_fruit = torch.argmax(m1(img_t), 1).item() == 1
                 if is_fruit:
-                    idx = torch.argmax(m3(t), 1).item()
-                    sub_cat = fruit_names[idx]
-                    # Segmentation
-                    t256 = tf_256(img).unsqueeze(0).to(DEVICE)
-                    bin_mask = (torch.sigmoid(m4(t256)) > 0.5).cpu().numpy()[0][0]
+                    sub_cat = fruit_names[torch.argmax(m3(img_t), 1).item()]
+                    img_256 = tf_256(img_pil).unsqueeze(0).to(DEVICE)
+                    b_mask = (torch.sigmoid(m4(img_256)) > 0.5).float().cpu().numpy()[0][0]
+                    m_mask_indices = torch.argmax(m5(img_256), 1).cpu().numpy()[0]
+                    colored_mask = get_colored_mask(m_mask_indices)
                 else:
-                    # Food logic via ProtoNet (Simulated distance matching)
-                    sub_cat = "Food Item" # Replace with actual distance logic if needed
+                    emb = m2(img_t).cpu()
+                    sub_cat, min_d = "Unknown", float('inf')
+                    for name, proto in food_protos.items():
+                        dist = torch.norm(emb - proto).item()
+                        if dist < min_d: min_d, sub_cat = dist, name
 
-            # البحث عن السعرات
             search_key = sub_cat.lower().replace(' ', '').replace('_', '')
-            raw_cal_text = cal_map.get(search_key, "N/A")
-            total_cal = calculate_final_calories(raw_cal_text, grams)
+            cal_val = cal_map.get(search_key, "N/A")
 
-            # العرض الجمالي
             st.markdown(f'<div class="result-card">', unsafe_allow_html=True)
-            c1, c2, c3 = st.columns([1.5, 2, 2.5])
-            with c1: st.image(img, use_container_width=True)
+            c1, c2, c3 = st.columns([1.5, 2, 3])
+            with c1: st.image(img_pil, use_container_width=True)
             with c2:
-                st.markdown(f"### {sub_cat}")
-                st.markdown(f'<div class="calorie-badge">🔥 {total_cal} Total Cal</div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="weight-tag">Detected: {grams}g</div>', unsafe_allow_html=True)
+                st.markdown(f"<h2 style='color:{'#2E7D32' if is_fruit else '#1565C0'};'>{'Fruit' if is_fruit else 'Food'}</h2>", unsafe_allow_html=True)
+                st.write(f"**Identified:** {sub_cat}")
+                st.markdown(f'<div class="calorie-badge">🔥 {cal_val} Cal</div>', unsafe_allow_html=True)
             with c3:
                 if is_fruit:
-                    st.image(bin_mask, caption="AI Segmentation Mask", use_container_width=True)
+                    mc1, mc2 = st.columns(2)
+                    mc1.image(b_mask, caption="Binary Mask", use_container_width=True)
+                    mc2.image(colored_mask, caption="Colored Mask", use_container_width=True)
                 else:
-                    st.info("Product identified via visual fingerprint matching.")
+                    st.info("🧬 Identified via Feature Matching against Dataset.")
             st.markdown('</div>', unsafe_allow_html=True)
+        st.balloons()
 
 with tab2:
     st.subheader("🧬 Visual Similarity Search (Siamese Ranking)")
@@ -230,7 +224,11 @@ with tab2:
             cols = st.columns(4)
             for i, item in enumerate(results):
                 with cols[i % 4]:
-                    st.markdown(f'<div class="siamese-card"><div class="file-name-text">📄 {item["n"]}</div></div>', unsafe_allow_html=True)
+                    st.markdown(f"""
+                        <div class="siamese-card">
+                            <div class="file-name-text">📄 {item['n']}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
                     st.image(item['f'], use_container_width=True)
                     d_color = "green" if item['d'] < 10 else "orange" if item['d'] < 20 else "red"
                     st.markdown(f"<p style='text-align:center; color:{d_color}; font-weight:bold;'>Dist: {item['d']:.3f}</p>", unsafe_allow_html=True)
