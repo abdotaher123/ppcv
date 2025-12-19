@@ -75,9 +75,7 @@ def get_final_calories(raw_text, grams):
         return f"{total:.1f}"
     except: return raw_text
 
-# ==========================================
-# 4. هياكل الموديلات
-# ==========================================
+
 class FoodFruitClassifier(nn.Module):
     def __init__(self, num_classes=2):
         super().__init__()
@@ -179,6 +177,7 @@ with tab1:
             img_pil = Image.open(file).convert('RGB')
             grams = extract_weight(file.name)
             img_t_cls = tf_cls(img_pil).unsqueeze(0).to(DEVICE)
+            catg=""
             
             with torch.no_grad():
                 is_fruit = torch.argmax(m1(img_t_cls), 1).item() == 1
@@ -188,12 +187,14 @@ with tab1:
                     b_mask = (torch.sigmoid(m4(img_t_seg)) > 0.5).float().cpu().numpy()[0][0]
                     m_mask_idx = torch.argmax(m5(img_t_seg), 1).cpu().numpy()[0]
                     colored_mask = get_colored_mask(m_mask_idx)
+                    catg = "Fruit"
                 else:
                     emb = m2(img_t_cls).cpu()
                     sub_cat, min_d = "Unknown", float('inf')
                     for name, proto in food_protos.items():
                         d = torch.norm(emb - proto).item()
                         if d < min_d: min_d, sub_cat = d, name
+                    catg = "Food"    
 
             raw_val = cal_map.get(sub_cat.lower().replace(' ', '').replace('_', ''), "N/A")
             total_cal = get_final_calories(raw_val, grams)
@@ -202,8 +203,10 @@ with tab1:
             c1, c2, c3 = st.columns([1.5, 2, 3.5])
             c1.image(img_pil, use_container_width=True)
             with c2:
+                st.markdown(f"## {catg} ")
                 st.markdown(f"### {sub_cat}")
                 st.markdown(f'<div class="weight-info">⚖️ Extracted: {grams}g</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="calorie-badge">🔥 {raw_val} </div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="calorie-badge">🔥 {total_cal} Total Cal</div>', unsafe_allow_html=True)
             with c3:
                 if is_fruit:
